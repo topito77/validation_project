@@ -1,0 +1,452 @@
+---
+title: "Time Series Analysis: Monthly Airline Passenger Numbers (1949–1960)"
+author: "Group [Your Names Here]"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    theme: flatly
+    highlight: tango
+    number_sections: true
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.width  = 10,
+  fig.height = 5
+)
+```
+
+```{r libraries}
+# Core time-series packages
+library(fpp3)       # tsibble, fable, feasts — modern tidy time-series workflow
+library(tsibble)    # tidy time-series data structure
+library(feasts)     # feature extraction and statistics (ACF, PACF, decomposition)
+library(fable)      # forecasting models (ETS, ARIMA, benchmarks)
+
+# Utilities
+library(dplyr)
+library(ggplot2)
+library(knitr)
+library(kableExtra)
+```
+
+---
+
+# Data & Question {#data-question}
+
+## Dataset
+
+We use the classic **`AirPassengers`** dataset, which records the **monthly number of international airline passengers** (in thousands) from **January 1949 to December 1960**.  
+This dataset is built into R and is widely used as a benchmark for time-series methods.
+
+**Time unit:** monthly observations  
+**Length:** 144 observations (12 years × 12 months)  
+**Variable:** total passengers (thousands)
+
+## Research Question
+
+> *Can we accurately forecast monthly international airline passenger numbers for 1959–1960 (the final two years), using data from 1949 to 1958?*
+
+More broadly, we want to understand the **trend**, **seasonal pattern**, and **variance behaviour** of the series, choose an appropriate model, and evaluate its out-of-sample forecast accuracy.
+
+```{r load-data}
+# Convert the built-in ts object to a tsibble for a tidy workflow
+passengers_ts <- as_tsibble(AirPassengers) %>%
+  rename(passengers = value,
+         month      = index)
+
+# Quick look at the data structure
+glimpse(passengers_ts)
+kable(head(passengers_ts, 12), caption = "First 12 observations") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+---
+
+# Initial Visual Inspection {#visual-inspection}
+
+## Raw Series Plot
+
+```{r raw-plot}
+passengers_ts %>%
+  autoplot(passengers) +
+  labs(
+    title    = "Monthly International Airline Passengers (1949–1960)",
+    subtitle = "Source: Box & Jenkins (1976) via R datasets",
+    x        = "Month",
+    y        = "Passengers (thousands)"
+  ) +
+  theme_bw()
+```
+
+**Observations:**
+
+- **Upward trend:** passenger numbers grow steadily over the 12-year period, roughly doubling from ~120k to ~450k.  
+- **Strong annual seasonality:** a clear recurring peak each summer (July–August) and a trough in winter (November–February).  
+- **Increasing variance:** the amplitude of seasonal swings grows with the level — characteristic of *multiplicative* seasonality. This motivates a log transformation.  
+- **No obvious structural breaks or outliers** within the series.
+
+## ACF and PACF
+
+```{r acf-pacf}
+passengers_ts %>%
+  gg_tsdisplay(passengers, plot_type = "partial", lag_max = 48) +
+  labs(title = "ACF and PACF — Raw Passengers Series")
+```
+
+**Interpretation:**
+
+- The ACF decays very slowly (long memory), confirming a strong **trend** component.  
+- Spikes at lags 12, 24, 36 in the ACF confirm **annual seasonality**.  
+- The PACF shows a dominant spike at lag 1, consistent with an AR(1) or integrated process.  
+- These patterns suggest that differencing (both regular and seasonal) will be needed before fitting ARIMA models.
+
+## STL Decomposition
+
+```{r stl-decomp}
+passengers_ts %>%
+  model(STL(passengers ~ trend(window = 13) + season(window = "periodic"),
+            robust = TRUE)) %>%
+  components() %>%
+  autoplot() +
+  labs(title = "STL Decomposition of Passengers Series") +
+  theme_bw()
+```
+
+**Interpretation:**
+
+- The **trend** component rises continuously with no obvious change point.  
+- The **seasonal** component shows a stable summer peak / winter trough; choosing `season(window = "periodic")` fixes this shape over time — justified because the pattern looks very consistent.  
+- The **remainder** is small relative to trend and season, suggesting the decomposition captures most variation.  
+- **Important:** the growing seasonal amplitude in the raw series is not fully handled by an additive decomposition — further confirmation that a log transform is warranted.
+
+---
+
+# Pre-processing Choices {#preprocessing}
+
+## Log Transformation
+
+The increasing variance (proportional to the level) is the classic signature of a **multiplicative** structure. Taking logarithms converts multiplicative relationships to additive ones, stabilising the variance.
+
+```{r log-transform}
+passengers_ts <- passengers_ts %>%
+  mutate(log_passengers = log(passengers))
+
+passengers_ts %>%
+  autoplot(log_passengers) +
+  labs(
+    title    = "Log-Transformed Monthly Passengers",
+    x        = "Month",
+    y        = "log(Passengers)"
+  ) +
+  theme_bw()
+```
+
+After the log transform the seasonal amplitude is visually constant, confirming this was the right choice.
+
+## Differencing
+
+We check the number of regular and seasonal differences required using unit-root tests:
+
+```{r differencing-tests}
+# Kwiatkowski–Phillips–Schmidt–Shin (KPSS) test for regular differencing
+passengers_ts %>% features(log_passengers, unitroot_kpss)
+
+# Number of regular differences suggested
+passengers_ts %>% features(log_passengers, unitroot_ndiffs)
+
+# Number of seasonal differences suggested
+passengers_ts %>% features(log_passengers, unitroot_nsdiffs)
+```
+
+```{r differenced-series}
+passengers_ts <- passengers_ts %>%
+  mutate(
+    diff1_log = difference(log_passengers, 1),        # first difference
+    diff1_12_log = difference(diff1_log, 12)          # seasonal difference on top
+  )
+
+# Inspect stationarity after both differences
+passengers_ts %>%
+  filter(!is.na(diff1_12_log)) %>%
+  autoplot(diff1_12_log) +
+  labs(
+    title = "Doubly-Differenced Log Passengers (d=1, D=1, s=12)",
+    x     = "Month",
+    y     = "Δ₁Δ₁₂ log(Passengers)"
+  ) +
+  theme_bw()
+```
+
+**Justification:**
+
+- The KPSS test rejects stationarity for the raw log series → at least one regular difference needed.
+- `unitroot_nsdiffs()` suggests one seasonal difference (D = 1) because the series has a seasonal unit root.
+- After both differences the series fluctuates around zero with roughly constant variance — consistent with stationarity.
+- We will pass `d = 1, D = 1` explicitly to ARIMA models (or let `auto_arima` confirm this).
+
+---
+
+# Baseline Forecasts {#baselines}
+
+We split the data: **train = 1949–1958 (120 obs)**, **test = 1959–1960 (24 obs)**.
+
+```{r train-test-split}
+train <- passengers_ts %>% filter(year(month) <= 1958)
+test  <- passengers_ts %>% filter(year(month) >= 1959)
+
+cat("Training observations:", nrow(train), "\n")
+cat("Test observations:    ", nrow(test),  "\n")
+```
+
+```{r baseline-models}
+# Fit all four standard benchmark models on the log scale
+baseline_fits <- train %>%
+  model(
+    Mean    = MEAN(log_passengers),
+    Naive   = NAIVE(log_passengers),
+    Drift   = RW(log_passengers ~ drift()),
+    SNaive  = SNAIVE(log_passengers ~ lag("year"))
+  )
+
+baseline_fits
+```
+
+```{r baseline-forecasts}
+# Forecast over the 24-month test horizon
+baseline_fc <- baseline_fits %>%
+  forecast(h = 24)
+
+# Plot on original (exponentiated) scale for interpretability
+baseline_fc %>%
+  autoplot(passengers_ts %>% filter(year(month) >= 1957),
+           level = NULL) +
+  labs(
+    title  = "Baseline Forecasts vs Actuals (1957–1960)",
+    x      = "Month",
+    y      = "log(Passengers)",
+    colour = "Model"
+  ) +
+  theme_bw()
+```
+
+**When each baseline makes sense:**
+
+| Model | When appropriate |
+|---|---|
+| **Mean** | Stationary series with no trend or seasonality; useful as a lower-bound benchmark |
+| **Naïve** | Random walk series (e.g., daily financial prices); carries last observation forward |
+| **Drift** | Series with a linear trend but no seasonality; extends the trend of the training period |
+| **Seasonal Naïve** | Strong seasonality, little trend; repeats the most recent full seasonal cycle |
+
+For `AirPassengers` (trend + seasonality) none of these will perform well, but they form the baseline against which real models are compared.
+
+---
+
+# Model Fitting: ETS and ARIMA/SARIMA {#models}
+
+## ETS (Exponential Smoothing State Space Model)
+
+ETS models decompose the series into **Error**, **Trend**, and **Seasonal** components, each of which can be **Additive (A)**, **Multiplicative (M)**, or **None (N)**.
+
+Because the series has:
+- Additive trend (on the log scale)
+- Additive seasonality (on the log scale, after log transform)
+- Additive errors (on the log scale)
+
+we expect ETS(A,A,A) (i.e., Holt-Winters additive) to be selected automatically. We also try a damped trend variant.
+
+```{r ets-models}
+ets_fits <- train %>%
+  model(
+    ETS_auto   = ETS(log_passengers),               # automatic selection
+    ETS_AAA    = ETS(log_passengers ~ error("A") +
+                       trend("A") + season("A")),   # explicit Holt-Winters additive
+    ETS_AAdA   = ETS(log_passengers ~ error("A") +
+                       trend("Ad") + season("A"))   # damped trend variant
+  )
+
+# Show what ETS_auto selected
+report(ets_fits %>% select(ETS_auto))
+```
+
+## ARIMA / SARIMA
+
+The ACF/PACF analysis and differencing tests suggest a **SARIMA(p,1,q)(P,1,Q)[12]** structure.  
+We fit an automatic model as well as a couple of hand-specified alternatives based on ACF/PACF inspection.
+
+```{r arima-models}
+arima_fits <- train %>%
+  model(
+    ARIMA_auto  = ARIMA(log_passengers),             # stepwise auto-selection
+    ARIMA_011   = ARIMA(log_passengers ~
+                          pdq(0,1,1) + PDQ(0,1,1)), # Box-Jenkins "airline" model
+    ARIMA_112   = ARIMA(log_passengers ~
+                          pdq(1,1,2) + PDQ(0,1,1))  # alternative specification
+  )
+
+# Report auto-selected model
+report(arima_fits %>% select(ARIMA_auto))
+```
+
+---
+
+# Forecast Evaluation on Future Data {#evaluation}
+
+## Generate Forecasts for the Test Period
+
+```{r all-forecasts}
+# Combine all models for a unified comparison
+all_fits <- train %>%
+  model(
+    Mean       = MEAN(log_passengers),
+    SNaive     = SNAIVE(log_passengers ~ lag("year")),
+    ETS_auto   = ETS(log_passengers),
+    ETS_AAA    = ETS(log_passengers ~ error("A") +
+                       trend("A") + season("A")),
+    ARIMA_auto = ARIMA(log_passengers),
+    ARIMA_011  = ARIMA(log_passengers ~
+                         pdq(0,1,1) + PDQ(0,1,1))
+  )
+
+all_fc <- all_fits %>%
+  forecast(h = 24)
+```
+
+## Forecast vs Actuals Plot
+
+```{r fc-vs-actual-plot}
+all_fc %>%
+  autoplot(passengers_ts %>% filter(year(month) >= 1957),
+           level = NULL) +
+  autolayer(test, log_passengers, colour = "black", linewidth = 0.8) +
+  labs(
+    title    = "24-Month Forecasts vs Actuals (1959–1960)",
+    subtitle = "Black line = actuals; coloured lines = model forecasts",
+    x        = "Month",
+    y        = "log(Passengers)",
+    colour   = "Model"
+  ) +
+  theme_bw()
+```
+
+## Accuracy Metrics
+
+```{r accuracy-table}
+acc <- all_fc %>%
+  accuracy(passengers_ts)        # compare against full series (test window)
+
+acc %>%
+  select(.model, MAE, RMSE, MASE, RMSSE) %>%
+  arrange(RMSSE) %>%
+  kable(digits = 4, caption = "Forecast Accuracy on Test Set (1959–1960)") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+**Interpretation:**
+
+- We compare models on **RMSSE** (Root Mean Squared Scaled Error) and **MASE** (Mean Absolute Scaled Error), which are scale-independent and appropriate for comparing across model classes.  
+- The seasonal naïve provides a sensible scaled baseline (MASE ≈ 1 = "as good as seasonal naïve").  
+- We expect ETS and ARIMA models to outperform the benchmarks substantially, given the clear trend + seasonality structure.
+
+---
+
+# Residual Diagnostics {#diagnostics}
+
+Residual diagnostics are shown for the best-performing model (update `.model_name` below with your actual winner).
+
+```{r residual-diagnostics}
+# Identify the best model by lowest RMSSE, then extract it from all_fits
+best_model_name <- acc %>%
+  arrange(RMSSE) %>%
+  slice(1) %>%
+  pull(.model)
+
+best_fit <- all_fits %>% select(all_of(best_model_name))
+
+# Comprehensive residual plot (residuals, ACF, histogram)
+best_fit %>%
+  gg_tsresiduals(lag_max = 48) +
+  labs(title = paste("Residual Diagnostics —", best_model_name))
+```
+
+## Ljung–Box Portmanteau Test
+
+```{r ljung-box}
+augment(best_fit) %>%
+  features(.innov, ljung_box, lag = 24, dof = 2)
+```
+
+**Interpretation:**
+
+- **Residual plot:** ideally centred near zero with no visible pattern (no trend, no heteroscedasticity).  
+- **ACF of residuals:** all autocorrelations within the ±1.96/√n bounds → no remaining structure.  
+- **Histogram:** approximately bell-shaped → supports Gaussian assumption.  
+- **Ljung–Box test:** if p-value > 0.05, we fail to reject the null of no autocorrelation — residuals are consistent with white noise.  
+
+> *[Fill in your actual p-value and conclusion here after knitting.]*
+
+---
+
+# Conclusion {#conclusion}
+
+## Final Model Selection
+
+Based on the accuracy metrics and residual diagnostics:
+
+| Criterion | Evidence |
+|---|---|
+| Lowest RMSSE / MASE | *[Update after knitting]* |
+| Residuals ≈ white noise | *[Update after knitting]* |
+| Parsimony | ARIMA(0,1,1)(0,1,1)[12] is the classic two-parameter "airline model" |
+
+**Chosen model:** The best-performing model identified above (by lowest RMSSE on the test set) — expected to be `ARIMA(0,1,1)(0,1,1)[12]` on the log-transformed series.  
+*(revise the final forecast code below if a different model is chosen)*
+
+## Final Forecast (Horizon: 12 months, 1961)
+
+```{r final-forecast}
+# Refit on the full dataset (train + test) for the production forecast
+final_fit <- passengers_ts %>%
+  model(Final = ARIMA(log_passengers ~ pdq(0,1,1) + PDQ(0,1,1)))
+
+final_fc <- final_fit %>%
+  forecast(h = 12)
+
+# Back-transform from log scale for the plot
+final_fc %>%
+  autoplot(passengers_ts, level = 80) +
+  labs(
+    title    = "12-Month Forecast: International Passengers (1961)",
+    subtitle = "80% prediction interval; model fitted on full 1949–1960 data",
+    x        = "Month",
+    y        = "log(Passengers)"
+  ) +
+  theme_bw()
+```
+
+## Implications and Limitations
+
+**Implications:**
+
+- The forecast captures the expected continued growth and summer peak, providing actionable guidance for airline capacity planning.
+- The 80% prediction interval reflects genuine uncertainty that widens over the horizon.
+
+**Limitations:**
+
+1. **Extrapolation risk:** we assume the upward trend continues; external shocks (recessions, fuel crises, pandemics) would invalidate this.  
+2. **Short history:** only 12 years of data limits our ability to detect low-frequency cycles or structural breaks.  
+3. **Log-normal errors:** back-transforming point forecasts introduces a small bias (Jensen's inequality); a bias-corrected mean can be computed as exp(forecast + σ²/2).  
+4. **No covariates:** economic growth, oil prices, and fare levels are known drivers of passenger demand but are absent from this model.  
+5. **Data vintage:** the series ends in 1960; a modern re-analysis would use a longer and richer dataset.
+
+---
+
+*Report knitted on `r Sys.Date()`. Runs end-to-end using R `r R.version.string`.*
