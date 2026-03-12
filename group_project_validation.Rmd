@@ -1,0 +1,156 @@
+---
+title: "Project by Group Validation"
+output: html_notebook
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+# Validation Group Project
+
+## Grading Criteria
+
+**Framing & data (15%)**
+
+-   Clear question + time unit + scope − Data suits time-series (enough
+    history, sensible frequency)
+
+**Exploratory time-series insights (20%)**
+
+-   Identifies trend/seasonality/breaks/variance − Uses appropriate
+    visuals (plots/ACF/PACF/decomp) − Interpretation links to modelling
+    choices
+
+**Modelling choices & justification (25%)**
+
+-   Benchmarks + at least one ETS/ARIMA/SARIMA (as appropriate) − Clear
+    justification (transform/difference/seasonality) − Tries
+    alternatives (not single “auto” only)
+
+**Forecast evaluation on future data (20%)**
+
+-   Time-based train/test split (or rolling) − Uses metrics (e.g.,
+    MAE/RMSE/MASE) + brief interpretation − Forecast vs actual on test
+    window; comparison drives selection
+
+**Diagnostics & conclusions (15%)**
+
+-   Residual plot + ACF + Ljung–Box/portmanteau − States whether
+    residuals look like white noise − Clear conclusion +
+    limitations/assumptions
+
+## Project
+
+### 1. Data & question
+
+We use daily Brent crude oil prices as our time series dataset. The question is: Can we accurately forecast Brent oil prices using classical time series models (ETS, ARIMA, SARIMA)?
+
+- Data source: U.S. Energy Information Administration (EIA) or FRED (Federal Reserve Economic Data)
+- Time unit: Daily
+- Scope: Multiple years (e.g., 2010–2025)
+- The dataset contains historical daily closing prices for Brent crude oil, suitable for time series analysis with sufficient history and frequency.
+
+
+```{r libraries}
+library(fpp3)
+library(tsibbledata)
+library(tidyverse)
+library(lubridate)
+library(quantmod)
+library(dygraphs)
+library(forecast)
+library(prophet)
+library(quantmod)
+```
+
+
+```{r oil price data}
+# Get WTI crude oil futures (symbol: CL=F) from Yahoo Finance
+library(quantmod)
+getSymbols("CL=F", src = "yahoo", from = "2010-01-01", auto.assign = TRUE)
+wti <- `CL=F`
+
+# Convert to tibble and preprocess
+library(tidyverse)
+library(tsibble)
+wti_tbl <- as_tibble(wti) %>%
+  mutate(date = index(wti)) %>%
+  select(date, price = `CL=F.Close`) %>%
+  filter(!is.na(price)) %>%
+  arrange(date) %>%
+  as_tsibble(index = date)
+
+glimpse(wti_tbl)
+summary(wti_tbl$price)
+```
+
+```{r load-electricity-data}
+# Load Ember European Wholesale Electricity Price Data
+library(readr)
+electricity_data <- read_csv("european_wholesale_electricity_price_data_monthly.csv")
+glimpse(electricity_data)
+summary(electricity_data$`Price (EUR/MWhe)`)
+```
+```
+
+### 2. Initial visual inspection
+
+```{r wti-visual-inspection, message=FALSE, warning=FALSE}
+# Get WTI crude oil futures (symbol: CL=F) from Yahoo Finance
+library(quantmod)
+getSymbols("CL=F", src = "yahoo", from = "2010-01-01", auto.assign = TRUE)
+wti <- `CL=F`
+
+# Convert to tibble and preprocess
+library(tidyverse)
+library(tsibble)
+wti_tbl <- as_tibble(wti) %>%
+  mutate(date = index(wti)) %>%
+  select(date, price = `CL=F.Close`) %>%
+  filter(!is.na(price)) %>%
+  arrange(date) %>%
+  as_tsibble(index = date)
+
+glimpse(wti_tbl)
+summary(wti_tbl$price)
+
+# Plot the time series
+ggplot(wti_tbl, aes(x = date, y = price)) +
+  geom_line(color = "steelblue") +
+  labs(title = "WTI Crude Oil Futures Prices (2010–2025)",
+       x = "Date",
+       y = "Price (USD/barrel)") +
+  theme_minimal()
+
+# ACF and PACF plots
+acf(wti_tbl$price, main = "ACF: WTI Oil Futures Prices")
+pacf(wti_tbl$price, main = "PACF: WTI Oil Futures Prices")
+```
+
+Interpretation:
+- The plot shows the trend and volatility in WTI oil futures prices over time.
+- ACF/PACF plots help identify autocorrelation and potential seasonality or breaks.
+
+### 3. Pre-processing choices (justify)
+
+### 4. Baseline forecasts
+
+### 5. Model Testing
+
+-   ETS (exponential smoothing)
+
+-   ARIMA
+
+-   SARIMA
+
+### 6. Evaluation on future data
+
+-   Use a time-based train/test split (not random)
+
+-   Compare models (e.g., MAE + RMSE, or MASE + RMSE)
+
+-   Show a plot of forecasts vs actuals on the test period.
+
+### 7. Residual diagnostics
+
+### 8. Conclusion
