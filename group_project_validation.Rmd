@@ -43,13 +43,8 @@ editor_options:
 
 ### 1. Data & question
 
-We use daily Brent crude oil prices as our time series dataset. The question is: Can we accurately forecast Brent oil prices using classical time series models (ETS, ARIMA, SARIMA)?
-
-- Data source: U.S. Energy Information Administration (EIA) or FRED (Federal Reserve Economic Data)
-- Time unit: Daily
-- Scope: Multiple years (e.g., 2010–2025)
-- The dataset contains historical daily closing prices for Brent crude oil, suitable for time series analysis with sufficient history and frequency.
-
+In the last years, Europe has faced geopolitical hardships that have led to significant volatility in energy prices. A large part of this has had to do with gas and oil dependency on other countries, in special Russia. More recently, the conflict in the Gulf has led to gas supplies being cut off from the European market, which has led to a surge in gas prices once again. This has had a significant impact on energy prices in Germany, which is one of the largest consumers of energy in Europe.
+This begs the question: to what extent do gas or oil prices affect energy prices in Germany? More specifically, after controlling for one of these commodities, can we better predict energy prices?
 
 ```{r libraries}
 library(fpp3)
@@ -61,79 +56,100 @@ library(dygraphs)
 library(forecast)
 library(prophet)
 library(quantmod)
+library(readr)
 ```
 
 
-```{r oil price data}
-# Get WTI crude oil futures (symbol: CL=F) from Yahoo Finance
-library(quantmod)
-getSymbols("CL=F", src = "yahoo", from = "2010-01-01", auto.assign = TRUE)
-wti <- `CL=F`
+```{r load germany electricity data}
+# Load Ember European Wholesale Electricity Price Data
+electricity_data <- read_csv("european_wholesale_electricity_price_data_monthly.csv")
 
-# Convert to tibble and preprocess
-library(tidyverse)
-library(tsibble)
-wti_tbl <- as_tibble(wti) %>%
-  mutate(date = index(wti)) %>%
-  select(date, price = `CL=F.Close`) %>%
-  filter(!is.na(price)) %>%
+german_electricity_data <- electricity_data %>%
+  filter(Country == "Germany") %>%
+  mutate(date = ymd(Date)) %>%
+  mutate(price = `Price (EUR/MWhe)`) %>%
+  select(date, price)
+
+glimpse(german_electricity_data)
+summary(german_electricity_data$price)
+```
+
+```{r load european gas prices}
+# Get TTF Natural Gas (symbol: TTF=F) from Yahoo Finance
+getSymbols("TTF=F", src = "yahoo", from = "2015-01-01", auto.assign = TRUE)
+gas <- `TTF=F`
+
+gas_tbl <- as_tibble(gas) %>%
+  mutate(date = index(gas)) %>%
+  select(date, price = `TTF=F.Close`) %>%
   arrange(date) %>%
   as_tsibble(index = date)
 
-glimpse(wti_tbl)
-summary(wti_tbl$price)
+glimpse(gas_tbl)
 ```
 
-```{r load-electricity-data}
-# Load Ember European Wholesale Electricity Price Data
-library(readr)
-electricity_data <- read_csv("european_wholesale_electricity_price_data_monthly.csv")
-glimpse(electricity_data)
-summary(electricity_data$`Price (EUR/MWhe)`)
-```
+```{r load brent futures data}
+# Get Brent crude oil futures (symbol: BZ=F) from Yahoo Finance
+getSymbols("BZ=F", src = "yahoo", from = "2015-01-01", auto.assign = TRUE)
+brent <- `BZ=F`
+
+# Convert to tibble and preprocess
+brent_tbl <- as_tibble(brent) %>%
+  mutate(date = index(brent)) %>%
+  select(date, price = `BZ=F.Close`) %>%
+  arrange(date) %>%
+  as_tsibble(index = date)
+
+glimpse(brent_tbl)
 ```
 
 ### 2. Initial visual inspection
 
-```{r wti-visual-inspection, message=FALSE, warning=FALSE}
-# Get WTI crude oil futures (symbol: CL=F) from Yahoo Finance
-library(quantmod)
-getSymbols("CL=F", src = "yahoo", from = "2010-01-01", auto.assign = TRUE)
-wti <- `CL=F`
-
-# Convert to tibble and preprocess
-library(tidyverse)
-library(tsibble)
-wti_tbl <- as_tibble(wti) %>%
-  mutate(date = index(wti)) %>%
-  select(date, price = `CL=F.Close`) %>%
-  filter(!is.na(price)) %>%
-  arrange(date) %>%
-  as_tsibble(index = date)
-
-glimpse(wti_tbl)
-summary(wti_tbl$price)
-
-# Plot the time series
-ggplot(wti_tbl, aes(x = date, y = price)) +
+```{r german electricity visual inspection}
+ggplot(german_electricity_data, aes(x = date, y = price)) +
   geom_line(color = "steelblue") +
-  labs(title = "WTI Crude Oil Futures Prices (2010–2025)",
+  labs(title = "German Wholesale Electricity Prices",
        x = "Date",
-       y = "Price (USD/barrel)") +
+       y = "Price (EUR/MWhe)") +
   theme_minimal()
-
-# ACF and PACF plots
-acf(wti_tbl$price, main = "ACF: WTI Oil Futures Prices")
-pacf(wti_tbl$price, main = "PACF: WTI Oil Futures Prices")
 ```
 
-Interpretation:
-- The plot shows the trend and volatility in WTI oil futures prices over time.
-- ACF/PACF plots help identify autocorrelation and potential seasonality or breaks.
+```{r indexed energy vs oil prices, echo=TRUE}
+# Index all series from their first value
+energy_base <- german_electricity_data$price[german_electricity_data$date == min(german_electricity_data$date)]
+brent_base <- brent_tbl$price[brent_tbl$date == min(brent_tbl$date)]
+gas_base <- gas_tbl$price[gas_tbl$date == min(gas_tbl$date)]
+
+energy_data_indexed <- german_electricity_data %>% mutate(indexed_price = (price / energy_base) * 100, series = "Energy Price (Germany)")
+brent_tbl_indexed <- brent_tbl %>% mutate(indexed_price = (price / brent_base) * 100, series = "Brent Oil Price")
+gas_tbl_indexed <- gas_tbl %>% mutate(indexed_price = (price / gas_base) * 100, series = "TTF Gas Price (JKM)")
+
+plot_data <- bind_rows(energy_data_indexed %>% select(date, indexed_price, series),
+                      brent_tbl_indexed %>% select(date, indexed_price, series),
+                      gas_tbl_indexed %>% select(date, indexed_price, series))
+
+# Plot
+ggplot(plot_data, aes(x = date, y = indexed_price, color = series)) +
+  geom_line() +
+  labs(title = "Indexed Energy, Brent Oil, and LNG Prices (Base 100)",
+       y = "Indexed Price (Base = 100)",
+       color = "Legend") +
+  theme_minimal()
+```
+
+
+There is a clear strong positive relationship between all three, though in special gas and energy.
+We can thus analyze the predictability of energy prices using historical data, as well as  wehn controlling for gas prices.
 
 ### 3. Pre-processing choices (justify)
+```{r acf and pacf inspection}
+# ACF and PACF plots
+acf(german_electricity_data$price, main = "ACF: German Electricity Prices")
+pacf(german_electricity_data$price, main = "PACF: German Electricity Prices")
+```
 
 ### 4. Baseline forecasts
+
 
 ### 5. Model Testing
 
