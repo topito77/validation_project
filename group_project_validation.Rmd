@@ -43,8 +43,44 @@ editor_options:
 
 ### 1. Data & question
 
-In the last years, Europe has faced geopolitical hardships that have led to significant volatility in energy prices. A large part of this has had to do with gas and oil dependency on other countries, in special Russia. More recently, the conflict in the Gulf has led to gas supplies being cut off from the European market, which has led to a surge in gas prices once again. This has had a significant impact on energy prices in Germany, which is one of the largest consumers of energy in Europe.
-This begs the question: to what extent do gas or oil prices affect energy prices in Germany? More specifically, after controlling for one of these commodities, can we better predict energy prices?
+In the last years, Europe has faced geopolitical hardships that have led
+to significant volatility in energy prices. A large part of this has had
+to do with gas and oil dependency on other countries, in special Russia.
+More recently, the conflict in the Gulf has led to gas supplies being
+cut off from the European market, which has led to a surge in gas prices
+once again. This has had a significant impact on energy prices and
+productivity in Germany, which is one of the largest consumers of energy
+in Europe and until recently of Russian gas through Nord Stream 1. At
+the same time, the EU as a whole has for years been pushing for energy
+security especially through a push on Renewables. This begs the
+question: to what extent are energy prices still determined by gas and
+oil?
+
+To test this we will look at how predictable energy prices can be on
+their own, and how predictable they are once we control for gas or oil
+prices, whichever one of which energy is most correlated to. To start
+off, we will look at three data sources side by side from 2015 until the
+present:
+
+-   **German electricity price EUR/MWhe:** for historical data on Garman
+    energy prices we will use data from
+    [Ember](https://ember-energy.org/), an organization providing open
+    source electricity data for the EU. We will filter specifically for
+    prices in Germany
+
+-   **Fossil prices:** We will look at the daily closing prices of both
+    oil and gas futures and focus on whichever one has the strongest
+    relationship with energy prices in Germany. Both are taken from
+    Yahoo Finance using the quantmod package
+
+    -   **Gas Price (TTF= F, €/MWh):** Based on the Dutch TTF Natural
+        Gas Futures closing price, which is an European gas benchmark
+
+    -   **Oil prices (BZ = F, \$/bbl):** Based on the Brent Crude Oil
+        Futures daily closing prices for a barrel of brent oil. This is
+        based on oil coming from the North Sea, which is one of the main
+        sources of oil in Germany as well as the global benchmark, and
+        therefore a good indicator of prices in the country
 
 ```{r libraries}
 library(fpp3)
@@ -58,7 +94,6 @@ library(prophet)
 library(quantmod)
 library(readr)
 ```
-
 
 ```{r load germany electricity data}
 # Load Ember European Wholesale Electricity Price Data
@@ -105,14 +140,11 @@ glimpse(brent_tbl)
 
 ### 2. Initial visual inspection
 
-```{r german electricity visual inspection}
-ggplot(german_electricity_data, aes(x = date, y = price)) +
-  geom_line(color = "steelblue") +
-  labs(title = "German Wholesale Electricity Prices",
-       x = "Date",
-       y = "Price (EUR/MWhe)") +
-  theme_minimal()
-```
+To start, we should look at the relationship between the three. To do so
+I have indexed the relationship between German electricity price, Brent
+oil price, and TTF gas price (base = 100) for easier comparison. The
+starting point chosen was 2015, which gives us approximately a 10 year
+window to analyze.
 
 ```{r indexed energy vs oil prices, echo=TRUE}
 # Index all series from their first value
@@ -137,19 +169,128 @@ ggplot(plot_data, aes(x = date, y = indexed_price, color = series)) +
   theme_minimal()
 ```
 
-
-There is a clear strong positive relationship between all three, though in special gas and energy.
-We can thus analyze the predictability of energy prices using historical data, as well as  wehn controlling for gas prices.
+There is a clear strong positive relationship between all three, though
+in special gas and energy. We can thus analyze the predictability of
+energy prices using historical data, as well as when controlling for gas
+prices. From a first look, Germany still has a strong dependence on gas
+and oil imports.
 
 ### 3. Pre-processing choices (justify)
-```{r acf and pacf inspection}
-# ACF and PACF plots
-acf(german_electricity_data$price, main = "ACF: German Electricity Prices")
-pacf(german_electricity_data$price, main = "PACF: German Electricity Prices")
+
+What we are primarily looking at is still the energy prices in Germany.
+We should visualize it individually to decide how we want the data to be
+processed and what trends we can find. We will look at the data as is, log-transformed, first-differenced, and seasonally differenced (lag = 12) to get a better understanding of the trends, seasonality, and volatility in the data.
+
+```{r german electricity visual inspection}
+ggplot(german_electricity_data, aes(x = date, y = price)) +
+  geom_line(color = "steelblue") +
+  labs(title = "German Wholesale Electricity Prices",
+       x = "Date",
+       y = "Price (EUR/MWhe)") +
+  theme_minimal()
 ```
 
-### 4. Baseline forecasts
+```{r}
+german_electricity_data <- german_electricity_data %>%
+  mutate(log_price = log(price))
 
+ggplot(german_electricity_data, aes(x = date, y = log_price)) +
+  geom_line(color = "darkgreen") +
+  labs(
+    title = "German Electricity Price — Log Scale",
+    x     = "Month",
+    y     = "log(Price)"
+  ) +
+  theme_minimal()
+```
+
+
+```{r}
+german_electricity_data <- german_electricity_data %>%
+  mutate(diff1 = difference(price))
+
+ggplot(german_electricity_data, aes(x = date, y = diff1)) +
+  geom_line(color = "red") +
+  labs(
+    title = "German Electricity Price — First Difference (Month-on-Month Change)",
+    x     = "Month",
+    y     = "Change in Price (EUR/MWhe)"
+  ) +
+  theme_minimal()
+
+```
+
+
+```{r}
+german_electricity_data <- german_electricity_data %>%
+  mutate(diff_s = difference(price, lag = 12))
+
+ggplot(german_electricity_data, aes(x = date, y = diff_s)) +
+  geom_line(color = "blue") +
+  labs(
+    title = "German Electricity Price — Seasonal Difference (lag = 12)",
+    x     = "Month",
+    y     = "Change vs Same Month Previous Year (EUR/MWhe)"
+  ) +
+  theme_minimal()
+```
+
+
+**Trends:** The key trend we see here beyond any seasonality, is the
+connection between energy prices and the state of global affairs. We see
+for example a slump around 2020 as Covid-19 quelled energy demand in
+many sectors to a minimum of 17.51€. Meanwhile, the clearest outlier
+here is still the sharp rise in energy prices following the invasion of
+Ukraine, with prices growing more than eightfold to 463.59€. We also saw
+from the previous graph that there is a strong relationship between gas
+prices and the energy prices, as would be expected.
+
+**Seasonality:** The seasonality of energy prices became especially
+clear in 2022-24. While prices were relatively high throughout, they
+would shoot up in the winter and to a lesser extent in the summer.
+According to [Che et al.
+2025](https://www.sciencedirect.com/science/article/abs/pii/S014098832500564X)
+this is indeed what we expect in such a situation. For the analysis, we
+should thus analyse the data at a month-based time granularity.
+
+**Volatility:** Volatility is high, especially so during periods of
+geopolitical volatility, this is especially clear when looking at the
+change in prices since 2022.
+
+**Transformation **
+- The original price series shows strong upward trends, sharp volatility spikes, and possible seasonality, especially around 2022–2023.
+- The log transformation stabilizes variance, making relative changes easier to interpret and reducing the impact of extreme price spikes. However, trends and seasonality remain visible.
+- The first difference (month-on-month) removes the trend, highlighting short-term changes and volatility. It helps reveal abrupt shifts and makes the series more stationary, but some seasonality and noise persist.
+- The seasonal difference (lag = 12) does a good job at removing the annual seasonality during stable years, but accentuates extreme events rather than smoothing them out.
+Comparing all four, the log transformation is  useful to stabilize variance, but it does not remove the trend or seasonality. The first difference removes the trend but not the seasonality, which may still be present in the data. Therefore, for modeling purposes, we will likely want to use the seasonally differenced data in combination with a log transformation to handle volatility.
+
+```{r acf and pacf inspection}
+# Combine log transformation and seasonal difference (lag = 12)
+german_electricity_data <- german_electricity_data %>%
+  mutate(log_price = log(price),
+         log_diff_s = log_price - lag(log_price, 12))
+
+ggplot(german_electricity_data, aes(x = date, y = log_diff_s)) +
+  geom_line(color = "blue") +
+  labs(
+    title = "German Electricity Price — Log Seasonal Difference (lag = 12)",
+    x     = "Month",
+    y     = "log(Price) Change vs Same Month Previous Year"
+  ) +
+  theme_minimal()
+```
+
+
+## ACF and PACF Inspection
+```{r acf and pacf inspection}
+# ACF and PACF plots with monthly lag (lag.max = 12)
+acf(german_electricity_data$price, lag.max = 12, main = "ACF: German Electricity Prices (Monthly Lag)")
+pacf(german_electricity_data$price, lag.max = 12, main = "PACF: German Electricity Prices (Monthly Lag)")
+```
+
+When we look at the ACF plot, almost all the bars are above the blue line. This means the electricity prices are very closely linked to their past values, and the data is not ready for forecasting yet—it needs more cleaning or transformation. The PACF plot is better. Here, only a few bars are above the blue line, and most are below. This means the PACF helps us see which months really matter for predicting the next value. Even though it's not perfect, the PACF gives us more useful information than the ACF, which just shows everything is connected.
+
+### 4. Baseline forecasts
 
 ### 5. Model Testing
 
