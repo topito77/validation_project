@@ -115,11 +115,23 @@ summary(german_electricity_data$price)
 getSymbols("TTF=F", src = "yahoo", from = "2015-01-01", auto.assign = TRUE)
 gas <- `TTF=F`
 
+# Convert to tibble and handle duplicates
 gas_tbl <- as_tibble(gas) %>%
   mutate(date = index(gas)) %>%
   select(date, price = `TTF=F.Close`) %>%
+  # Remove any rows with NA prices
+  filter(!is.na(price)) %>%
+  # Ensure dates are unique by taking the last observation on duplicate dates
+  group_by(date) %>%
+  summarise(price = last(price), .groups = "drop") %>%
   arrange(date) %>%
+  # Convert to tsibble
   as_tsibble(index = date)
+
+# Check for any remaining duplicates
+if(any(duplicated(gas_tbl$date))) {
+  warning("Still have duplicate dates after cleaning")
+}
 
 glimpse(gas_tbl)
 ```
@@ -129,11 +141,23 @@ glimpse(gas_tbl)
 getSymbols("BZ=F", src = "yahoo", from = "2015-01-01", auto.assign = TRUE)
 brent <- `BZ=F`
 
+# Convert to tibble and handle duplicates
 brent_tbl <- as_tibble(brent) %>%
   mutate(date = index(brent)) %>%
   select(date, price = `BZ=F.Close`) %>%
+  # Remove any rows with NA prices
+  filter(!is.na(price)) %>%
+  # Ensure dates are unique by taking the last observation on duplicate dates
+  group_by(date) %>%
+  summarise(price = last(price), .groups = "drop") %>%
   arrange(date) %>%
+  # Convert to tsibble
   as_tsibble(index = date)
+
+# Check for any remaining duplicates
+if(any(duplicated(brent_tbl$date))) {
+  warning("Still have duplicate dates after cleaning for Brent data")
+}
 
 glimpse(brent_tbl)
 ```
