@@ -1,8 +1,8 @@
 ---
 title: "Project by Group Validation"
 output: html_notebook
-editor_options: 
-  markdown: 
+editor_options:
+  markdown:
     wrap: 72
 ---
 
@@ -25,7 +25,7 @@ editor_options:
 
 -   Benchmarks + at least one ETS/ARIMA/SARIMA (as appropriate) − Clear
     justification (transform/difference/seasonality) − Tries
-    alternatives (not single “auto” only)
+    alternatives (not single "auto" only)
 
 **Forecast evaluation on future data (20%)**
 
@@ -62,25 +62,25 @@ prices, whichever one of which energy is most correlated to. To start
 off, we will look at three data sources side by side from 2015 until the
 present:
 
--   **German electricity price EUR/MWhe:** for historical data on Garman
-    energy prices we will use data from
-    [Ember](https://ember-energy.org/), an organization providing open
-    source electricity data for the EU. We will filter specifically for
-    prices in Germany
+- **German electricity price EUR/MWhe:** for historical data on German
+  energy prices we will use data from
+  [Ember](https://ember-energy.org/), an organization providing open
+  source electricity data for the EU. We will filter specifically for
+  prices in Germany
 
--   **Fossil prices:** We will look at the daily closing prices of both
-    oil and gas futures and focus on whichever one has the strongest
-    relationship with energy prices in Germany. Both are taken from
-    Yahoo Finance using the quantmod package
+- **Fossil prices:** We will look at the daily closing prices of both
+  oil and gas futures and focus on whichever one has the strongest
+  relationship with energy prices in Germany. Both are taken from
+  Yahoo Finance using the quantmod package
 
-    -   **Gas Price (TTF= F, €/MWh):** Based on the Dutch TTF Natural
-        Gas Futures closing price, which is an European gas benchmark
+  - **Gas Price (TTF=F, €/MWh):** Based on the Dutch TTF Natural
+    Gas Futures closing price, which is an European gas benchmark
 
-    -   **Oil prices (BZ = F, \$/bbl):** Based on the Brent Crude Oil
-        Futures daily closing prices for a barrel of brent oil. This is
-        based on oil coming from the North Sea, which is one of the main
-        sources of oil in Germany as well as the global benchmark, and
-        therefore a good indicator of prices in the country
+  - **Oil prices (BZ=F, \$/bbl):** Based on the Brent Crude Oil
+    Futures daily closing prices for a barrel of brent oil. This is
+    based on oil coming from the North Sea, which is one of the main
+    sources of oil in Germany as well as the global benchmark, and
+    therefore a good indicator of prices in the country
 
 ```{r libraries}
 library(fpp3)
@@ -91,7 +91,6 @@ library(quantmod)
 library(dygraphs)
 library(forecast)
 library(prophet)
-library(quantmod)
 library(readr)
 ```
 
@@ -128,7 +127,6 @@ glimpse(gas_tbl)
 getSymbols("BZ=F", src = "yahoo", from = "2015-01-01", auto.assign = TRUE)
 brent <- `BZ=F`
 
-# Convert to tibble and preprocess
 brent_tbl <- as_tibble(brent) %>%
   mutate(date = index(brent)) %>%
   select(date, price = `BZ=F.Close`) %>%
@@ -190,7 +188,7 @@ ggplot(german_electricity_data, aes(x = date, y = price)) +
   theme_minimal()
 ```
 
-```{r}
+```{r log transform}
 german_electricity_data <- german_electricity_data %>%
   mutate(log_price = log(price))
 
@@ -204,8 +202,7 @@ ggplot(german_electricity_data, aes(x = date, y = log_price)) +
   theme_minimal()
 ```
 
-
-```{r}
+```{r first difference}
 german_electricity_data <- german_electricity_data %>%
   mutate(diff1 = difference(price))
 
@@ -217,11 +214,9 @@ ggplot(german_electricity_data, aes(x = date, y = diff1)) +
     y     = "Change in Price (EUR/MWhe)"
   ) +
   theme_minimal()
-
 ```
 
-
-```{r}
+```{r seasonal difference}
 german_electricity_data <- german_electricity_data %>%
   mutate(diff_s = difference(price, lag = 12))
 
@@ -234,7 +229,6 @@ ggplot(german_electricity_data, aes(x = date, y = diff_s)) +
   ) +
   theme_minimal()
 ```
-
 
 **Trends:** The key trend we see here beyond any seasonality, is the
 connection between energy prices and the state of global affairs. We see
@@ -257,14 +251,14 @@ should thus analyse the data at a month-based time granularity.
 geopolitical volatility, this is especially clear when looking at the
 change in prices since 2022.
 
-**Transformation **
+**Transformation**
 - The original price series shows strong upward trends, sharp volatility spikes, and possible seasonality, especially around 2022–2023.
 - The log transformation stabilizes variance, making relative changes easier to interpret and reducing the impact of extreme price spikes. However, trends and seasonality remain visible.
 - The first difference (month-on-month) removes the trend, highlighting short-term changes and volatility. It helps reveal abrupt shifts and makes the series more stationary, but some seasonality and noise persist.
 - The seasonal difference (lag = 12) does a good job at removing the annual seasonality during stable years, but accentuates extreme events rather than smoothing them out.
-Comparing all four, the log transformation is  useful to stabilize variance, but it does not remove the trend or seasonality. The first difference removes the trend but not the seasonality, which may still be present in the data. Therefore, for modeling purposes, we will likely want to use the seasonally differenced data in combination with a log transformation to handle volatility.
+Comparing all four, the log transformation is useful to stabilize variance, but it does not remove the trend or seasonality. The first difference removes the trend but not the seasonality, which may still be present in the data. Therefore, for modeling purposes, we will likely want to use the seasonally differenced data in combination with a log transformation to handle volatility.
 
-```{r acf and pacf inspection}
+```{r log seasonal diff plot}
 # Combine log transformation and seasonal difference (lag = 12)
 german_electricity_data <- german_electricity_data %>%
   mutate(log_price = log(price),
@@ -280,9 +274,9 @@ ggplot(german_electricity_data, aes(x = date, y = log_diff_s)) +
   theme_minimal()
 ```
 
-
 ## ACF and PACF Inspection
-```{r acf and pacf inspection}
+
+```{r acf pacf plots}
 # ACF and PACF plots with monthly lag (lag.max = 12)
 acf(german_electricity_data$price, lag.max = 12, main = "ACF: German Electricity Prices (Monthly Lag)")
 pacf(german_electricity_data$price, lag.max = 12, main = "PACF: German Electricity Prices (Monthly Lag)")
@@ -294,19 +288,185 @@ When we look at the ACF plot, almost all the bars are above the blue line. This 
 
 ### 5. Model Testing
 
+#### 5a. SARIMA with cut-out point only (benchmark)
+
+We use a **time-based train/test split**: the last 12 months are held out as the test set; all prior data are used for training. This mimics real-world forecasting where we forecast the next year from current data. We fit a seasonal ARIMA to the **log-transformed** German electricity price (to stabilize variance) and use seasonal differencing to handle annual seasonality.
+
+```{r train test split}
+# Cut-out point: last 12 months = test set
+test_months <- 12L
+n_obs <- nrow(german_electricity_data)
+train_end_idx <- n_obs - test_months
+
+# Ensure we have a proper tsibble with month index for the split
+german_elec_tsbl <- german_electricity_data %>%
+  mutate(month = yearmonth(date)) %>%
+  as_tsibble(index = month)
+
+# Train and test sets
+train_elec <- german_elec_tsbl %>% slice(1:train_end_idx)
+test_elec  <- german_elec_tsbl %>% slice((train_end_idx + 1):n_obs)
+
+# For forecast::Arima we need ts objects
+# Log price for modelling (stabilizes variance)
+train_ts <- ts(train_elec$log_price, start = c(year(min(train_elec$month)), month(min(train_elec$month))), frequency = 12)
+test_ts  <- ts(test_elec$log_price,  start = c(year(min(test_elec$month)),  month(min(test_elec$month))),  frequency = 12)
+
+cat("Train: ", nrow(train_elec), " months, from ", as.character(min(train_elec$month)), " to ", as.character(max(train_elec$month)), "\n")
+cat("Test:  ", nrow(test_elec),  " months, from ", as.character(min(test_elec$month)),  " to ", as.character(max(test_elec$month)), "\n")
+```
+
+```{r sarima cutout only}
+# SARIMA on log price (training data only) — seasonal ARIMA with order chosen by AIC
+# Using 1 seasonal difference (lag 12) and 1 non-seasonal difference to achieve stationarity
+fit_sarima_only <- auto.arima(train_ts,
+  seasonal = TRUE,
+  stepwise = TRUE,
+  approximation = FALSE,
+  trace = TRUE
+)
+
+summary(fit_sarima_only)
+
+# Forecast on test horizon (12 months)
+fc_sarima_only <- forecast(fit_sarima_only, h = test_months)
+
+# Forecasts are in log scale; store for later evaluation
+forecast_sarima_only_log <- as.numeric(fc_sarima_only$mean)
+```
+
+```{r plot sarima only forecast}
+# Plot: actual vs forecast (log scale) over test period
+test_dates <- test_elec$month
+plot_data_sarima <- tibble(
+  month = test_dates,
+  actual_log = as.numeric(test_ts),
+  forecast_log = forecast_sarima_only_log
+)
+
+ggplot(plot_data_sarima, aes(x = as.Date(month))) +
+  geom_line(aes(y = actual_log, colour = "Actual")) +
+  geom_line(aes(y = forecast_log, colour = "Forecast")) +
+  labs(
+    title = "SARIMA (cut-out only): Log electricity price — Actual vs Forecast (test period)",
+    x = "Month",
+    y = "log(Price EUR/MWhe)"
+  ) +
+  scale_colour_manual(name = "", values = c("Actual" = "black", "Forecast" = "red")) +
+  theme_minimal()
+```
+
+#### 5b. SARIMA with cut-out point and controlling for gas prices
+
+We now fit a **SARIMAX** model: the same seasonal ARIMA structure but with **TTF gas price** as an exogenous regressor. Gas is aggregated to **monthly** (average closing price per month) and aligned to the electricity calendar so that each electricity month has one gas value. This allows us to ask: does controlling for gas improve out-of-sample prediction of German electricity prices?
+
+```{r gas monthly alignment}
+# Aggregate gas (daily) to monthly: mean closing price per month
+gas_monthly <- gas_tbl %>%
+  mutate(month = yearmonth(date)) %>%
+  group_by(month) %>%
+  summarise(gas_price = mean(price, na.rm = TRUE), .groups = "drop")
+
+# Align to electricity months: same order as german_elec_tsbl (one row per electricity month)
+gas_aligned <- german_elec_tsbl %>%
+  select(month) %>%
+  left_join(gas_monthly, by = "month")
+# Fill any missing gas months (e.g. early data) with column mean so xreg has no NA
+gas_aligned <- gas_aligned %>%
+  mutate(gas_price = coalesce(gas_price, mean(gas_price, na.rm = TRUE)))
+
+# Split gas into train/test using same cut-out as electricity
+gas_train <- gas_aligned %>% slice(1:train_end_idx) %>% pull(gas_price)
+gas_test  <- gas_aligned %>% slice((train_end_idx + 1):n()) %>% pull(gas_price)
+
+# forecast::Arima expects xreg as a matrix
+xreg_train <- matrix(gas_train, ncol = 1)
+xreg_test  <- matrix(gas_test,  ncol = 1)
+colnames(xreg_train) <- colnames(xreg_test) <- "gas_price"
+
+cat("Gas monthly series length (train): ", length(gas_train), "\n")
+cat("Gas monthly series length (test):  ", length(gas_test), "\n")
+```
+
+```{r sarima with gas}
+# SARIMAX: seasonal ARIMA with TTF gas price as exogenous regressor (control for gas)
+# auto.arima selects order; xreg = gas_train aligns gas to electricity training period
+fit_sarima_gas <- auto.arima(train_ts,
+  seasonal = TRUE,
+  xreg = xreg_train,
+  stepwise = TRUE,
+  approximation = FALSE,
+  trace = TRUE
+)
+
+summary(fit_sarima_gas)
+
+# Forecast on test period using gas in test period as xreg
+fc_sarima_gas <- forecast(fit_sarima_gas, h = test_months, xreg = xreg_test)
+forecast_sarima_gas_log <- as.numeric(fc_sarima_gas$mean)
+```
+
+```{r plot sarima gas forecast}
+# Plot: actual vs forecast (log scale) when controlling for gas
+plot_data_gas <- tibble(
+  month = test_dates,
+  actual_log = as.numeric(test_ts),
+  forecast_log = forecast_sarima_gas_log
+)
+
+ggplot(plot_data_gas, aes(x = as.Date(month))) +
+  geom_line(aes(y = actual_log, colour = "Actual")) +
+  geom_line(aes(y = forecast_log, colour = "Forecast (with gas)")) +
+  labs(
+    title = "SARIMA controlling for gas: Log electricity price — Actual vs Forecast (test period)",
+    x = "Month",
+    y = "log(Price EUR/MWhe)"
+  ) +
+  scale_colour_manual(name = "", values = c("Actual" = "black", "Forecast (with gas)" = "darkgreen")) +
+  theme_minimal()
+```
+
+#### 5c. Forecasts in level scale for evaluation (MAE/RMSE)
+
+The evaluation section (Section 6) will compare MAE/RMSE on the **level** (EUR/MWhe). We convert log-forecasts back to level so the evaluator can use the same scale as the original data.
+
+```{r forecasts for evaluation}
+# Convert log-forecasts to level (exp(log) = level)
+actual_level_test <- as.numeric(exp(test_ts))
+forecast_sarima_only_level <- exp(forecast_sarima_only_log)
+forecast_sarima_gas_level   <- exp(forecast_sarima_gas_log)
+
+# Build a small tibble for Section 6 (evaluation)
+eval_df <- tibble(
+  month = test_dates,
+  actual = actual_level_test,
+  pred_sarima_only = forecast_sarima_only_level,
+  pred_sarima_gas  = forecast_sarima_gas_level
+)
+
+# Preview: MAE and RMSE (test set)
+mae_only <- mean(abs(eval_df$actual - eval_df$pred_sarima_only))
+mae_gas  <- mean(abs(eval_df$actual - eval_df$pred_sarima_gas))
+rmse_only <- sqrt(mean((eval_df$actual - eval_df$pred_sarima_only)^2))
+rmse_gas  <- sqrt(mean((eval_df$actual - eval_df$pred_sarima_gas)^2))
+
+cat("Test set — SARIMA (cut-out only):  MAE = ", round(mae_only, 2), ", RMSE = ", round(rmse_only, 2), "\n")
+cat("Test set — SARIMA (with gas):      MAE = ", round(mae_gas, 2),  ", RMSE = ", round(rmse_gas, 2),  "\n")
+```
+
+**Brief interpretation (for Section 6):** The evaluator can use `eval_df` and the printed MAE/RMSE above to compare the two SARIMA approaches. If the model controlling for gas achieves lower MAE and RMSE on the test period, it suggests that gas price contains useful information for predicting German electricity prices beyond the univariate SARIMA.
+
 -   ETS (exponential smoothing)
-
 -   ARIMA
-
--   SARIMA
+-   SARIMA (above: cut-out only and with gas control)
 
 ### 6. Evaluation on future data
 
 -   Use a time-based train/test split (not random)
-
 -   Compare models (e.g., MAE + RMSE, or MASE + RMSE)
-
 -   Show a plot of forecasts vs actuals on the test period.
+
+*(The train/test split and forecast vs actual plots are in Section 5. The object `eval_df` and the printed MAE/RMSE in chunk "forecasts for evaluation" provide the comparison for both SARIMA models.)*
 
 ### 7. Residual diagnostics
 
